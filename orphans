@@ -1,0 +1,62 @@
+#!/bin/bash
+
+# init variables, customize below
+# send notifications to
+EMAIL="notifications@company.com"
+# what domain to use to check deliverability
+DOMAIN="company.com"
+# output for bash cleanup commands-file
+COMMANDS="/var/orphans/orphan-mailboxes"
+# file with mailboxes to ignore
+IGNORES="/var/orphans/orphan-ignores"
+# file to email
+STATUS="/var/orphans/orphaned-status"
+# where mailboxes are stored
+MAILBOXES_UNDER="/var/vmail"
+# where to move mailboxes to, to generate the bash cleanup file
+MAILBOXES_ORPHANED="/var/orphans"
+# postfix ldap config file
+POSTFIX_LDAP="ldap:/etc/postfix/ldap-mailboxes.cf"
+# no need to customize below here
+POSTMAP=$(which postmap)
+
+# init the bash cleanup run file
+echo "# " $(date) > $COMMANDS
+echo "# remove the following safety exit, if you actually want to run the file:" >> $COMMANDS
+echo "exit" >> $COMMANDS
+echo "set -x" >> $COMMANDS
+echo "" >> $COMMANDS
+
+# init the email status file
+rm -f $STATUS
+touch $STATUS
+
+cd $MAILBOXES_UNDER
+
+# traverse all Maildir folders
+for DIR in */ ; do
+    # convert directory name into an emailaddress
+    # first remove the trailing slash:
+    LOCALPART=$(echo $DIR | sed 's:/*$::')
+    # convert to email address
+    TEST_EMAIL="$LOCALPART@$DOMAIN"
+
+    # check if postfix can deliver to that mailbox, using the postmap utility
+    # returns empty if undeliverable
+    DELIVERABLE=$(eval "$POSTMAP -q $TEST_EMAIL $POSTFIX_LDAP")
+
+    # then action, based on deliverability
+    if [ -z "$DELIVERABLE" ]; # email not deliverable
+    then
+	if ! grep -q $LOCALPART "$IGNORES"; # email not listed in to-be-ignored file
+	then
+	    echo "Postmap says: NOT deliverable: $TEST_EMAIL ($DIR)" >> $STATUS
+	    echo "mv $MAILBOXES_UNDER/$LOCALPART $MAILBOXES_ORPHANED" >> $COMMANDS
+	fi
+    fi
+done
+
+# send email, if status file not empty
+if [ -s $STATUS ]; then
+    cat $STATUS | mail -s "Daily overview of orphaned mailboxes" $EMAIL
+fi
